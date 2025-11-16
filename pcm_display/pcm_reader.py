@@ -8,7 +8,7 @@ import struct
 import os
 import pygame
 import threading
-from matplotlib.widgets import Button
+from matplotlib.widgets import Button, Slider, TextBox
 
 
 # 全局变量用于音频播放
@@ -16,28 +16,13 @@ startfilename = 'pcm_display/test_mixed.pcm'
 current_audio_data = None
 current_sample_rate = 44100
 is_playing = False
-
-def convert_to_wav_format(audio_data, sample_rate, bit_depth=16):
-    """
-    将音频数据转换为 WAV 格式的字节数据
-    """
-    # 转换为 16 位整数
-    if bit_depth == 16:
-        audio_16bit = (audio_data * 32767).astype(np.int16)
-        # 转换为字节
-        audio_bytes = audio_16bit.tobytes()
-    else:
-        # 其他位深度的处理
-        audio_16bit = (audio_data * 32767).astype(np.int16)
-        audio_bytes = audio_16bit.tobytes()
-
-    return audio_bytes
+playback_speed = 1.0  # 播放速度，1.0为正常速度
 
 def play_audio():
     """
-    播放音频数据
+    播放音频数据（支持变速播放）
     """
-    global current_audio_data, current_sample_rate, is_playing
+    global current_audio_data, current_sample_rate, is_playing, playback_speed
 
     if current_audio_data is None:
         print("没有音频数据可播放")
@@ -67,11 +52,17 @@ def play_audio():
         else:
             stereo_audio = audio_16bit
 
+        # 计算调整后的采样率（通过改变采样率来改变播放速度）
+        adjusted_sample_rate = int(current_sample_rate * playback_speed)
+
         print(f"播放数据形状: {stereo_audio.shape}")
         print(f"播放数据类型: {stereo_audio.dtype}")
+        print(f"原始采样率: {current_sample_rate}")
+        print(f"播放速度: {playback_speed}x")
+        print(f"调整后采样率: {adjusted_sample_rate}")
 
-        # 初始化 pygame mixer（立体声）
-        pygame.mixer.pre_init(frequency=current_sample_rate, size=-16, channels=2, buffer=1024)
+        # 初始化 pygame mixer（立体声，使用调整后的采样率）
+        pygame.mixer.pre_init(frequency=adjusted_sample_rate, size=-16, channels=2, buffer=1024)
         pygame.mixer.init()
 
         # 创建 Sound 对象并播放
@@ -208,62 +199,341 @@ def plot_waveform_simple(audio_data, time_axis, filename, original_audio_data, s
     # 创建图形和子图
     fig, ax = plt.subplots(figsize=(12, 7))
 
-    # 为按钮留出空间
-    plt.subplots_adjust(bottom=0.15)
+    # 为按钮和滑块留出空间（优化布局，顶部留更多空间）
+    plt.subplots_adjust(left=0.12, bottom=0.18, right=0.97, top=0.90)
 
     # 绘制波形
     ax.plot(display_time, display_audio, 'b-', linewidth=0.5)
 
     # 设置标题和标签
-    ax.set_title(f'PCM 音频时域波形 - {filename}', fontsize=14)
-    ax.set_xlabel('时间 (秒)', fontsize=12)
-    ax.set_ylabel('幅度', fontsize=12)
+    ax.set_title(f'PCM 音频时域波形 - {filename}', fontsize=13, pad=20)
+    ax.set_xlabel('时间 (秒)', fontsize=11)
+    ax.set_ylabel('幅度', fontsize=11)
 
     # 设置网格
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=0.3, linewidth=0.5)
 
-    # 设置 y 轴范围
-    ax.set_ylim(-1.1, 1.1)
+    # 保存初始显示范围
+    total_duration = len(original_audio_data) / sample_rate
+    initial_xlim = (0, total_duration)
+    initial_ylim = (-1.1, 1.1)
 
-    # 显示统计信息
+    # 设置初始轴范围
+    ax.set_ylim(initial_ylim)
+    ax.set_xlim(initial_xlim)
+
+    # 显示统计信息（在标题下方）
     max_val = np.max(np.abs(original_audio_data))
     rms_val = np.sqrt(np.mean(original_audio_data**2))
     duration = len(original_audio_data) / sample_rate
 
-    info_text = f'最大幅度: {max_val:.3f}\nRMS: {rms_val:.3f}\n时长: {duration:.2f}s\n采样率: {sample_rate}Hz'
-    ax.text(0.02, 0.98, info_text, transform=ax.transAxes,
-            verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+    info_text = f'最大幅度: {max_val:.3f} | RMS: {rms_val:.3f} | 时长: {duration:.2f}s | 采样率: {sample_rate}Hz'
+    ax.text(0.5, 1.04, info_text, transform=ax.transAxes,
+            ha='center', va='bottom', fontsize=9,
+            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, pad=0.3))
 
-    # 添加播放按钮
-    ax_play = plt.axes([0.3, 0.02, 0.1, 0.06])
+    # ========== Y轴控制区域（左侧） ==========
+    # Y轴缩放滑块
+    ax_yzoom = plt.axes([0.025, 0.30, 0.015, 0.50])
+    slider_yzoom = Slider(
+        ax=ax_yzoom,
+        label='Y缩放',
+        valmin=0.1,
+        valmax=10.0,
+        valinit=1.0,
+        orientation='vertical'
+    )
+    # Y缩放输入框（在滑块正上方）
+    ax_yzoom_input = plt.axes([0.012, 0.85, 0.04, 0.025])
+    textbox_yzoom = TextBox(ax_yzoom_input, '', initial='1.0')
+
+    # Y轴位置滑块
+    ax_ypos = plt.axes([0.07, 0.30, 0.015, 0.50])
+    slider_ypos = Slider(
+        ax=ax_ypos,
+        label='Y位置',
+        valmin=-2.0,
+        valmax=2.0,
+        valinit=0.0,
+        orientation='vertical'
+    )
+    # Y位置输入框（在滑块正上方）
+    ax_ypos_input = plt.axes([0.057, 0.85, 0.04, 0.025])
+    textbox_ypos = TextBox(ax_ypos_input, '', initial='0.0')
+
+    # ========== X轴控制区域（底部） ==========
+    # X轴缩放滑块
+    ax_xzoom = plt.axes([0.12, 0.11, 0.35, 0.015])
+    slider_xzoom = Slider(
+        ax=ax_xzoom,
+        label='X缩放',
+        valmin=0.1,
+        valmax=10.0,
+        valinit=1.0,
+        orientation='horizontal'
+    )
+    # X缩放输入框
+    ax_xzoom_input = plt.axes([0.48, 0.105, 0.04, 0.025])
+    textbox_xzoom = TextBox(ax_xzoom_input, '', initial='1.0')
+
+    # X轴位置滑块
+    ax_xpos = plt.axes([0.12, 0.07, 0.35, 0.015])
+    slider_xpos = Slider(
+        ax=ax_xpos,
+        label='X位置',
+        valmin=0.0,
+        valmax=1.0,
+        valinit=0.0,
+        orientation='horizontal'
+    )
+    # X位置输入框
+    ax_xpos_input = plt.axes([0.48, 0.065, 0.04, 0.025])
+    textbox_xpos = TextBox(ax_xpos_input, '', initial='0.0')
+
+    # ========== 播放控制区域（底部右侧） ==========
+    # 播放速度标签和输入框
+    ax_speed_label = plt.axes([0.54, 0.105, 0.08, 0.025])
+    ax_speed_label.text(0.5, 0.5, '播放速度:', ha='center', va='center', fontsize=9)
+    ax_speed_label.set_xticks([])
+    ax_speed_label.set_yticks([])
+    ax_speed_label.patch.set_visible(False)
+
+    ax_speed_input = plt.axes([0.63, 0.105, 0.04, 0.025])
+    textbox_speed = TextBox(ax_speed_input, '', initial='1.0')
+
+    # 播放按钮
+    ax_play = plt.axes([0.12, 0.02, 0.08, 0.035])
     button_play = Button(ax_play, '▶ 播放', color='lightgreen', hovercolor='green')
 
-    # 添加停止按钮
-    ax_stop = plt.axes([0.42, 0.02, 0.1, 0.06])
+    # 停止按钮
+    ax_stop = plt.axes([0.21, 0.02, 0.08, 0.035])
     button_stop = Button(ax_stop, '⏹ 停止', color='lightcoral', hovercolor='red')
 
-    # 添加状态显示
-    ax_status = plt.axes([0.54, 0.02, 0.2, 0.06])
+    # 状态显示
+    ax_status = plt.axes([0.31, 0.02, 0.25, 0.035])
     status_text = ax_status.text(0.5, 0.5, '准备播放', ha='center', va='center',
                                 transform=ax_status.transAxes, fontsize=10)
     ax_status.set_xticks([])
     ax_status.set_yticks([])
 
-    # 按钮回调函数
+    # Y轴控制函数（优化性能）
+    def update_y_axis(val=None):
+        """更新Y轴显示范围"""
+        zoom = slider_yzoom.val
+        ypos = slider_ypos.val
+
+        # 只在值改变时更新输入框（避免不必要的更新）
+        zoom_str = f'{zoom:.2f}'
+        ypos_str = f'{ypos:.2f}'
+        if textbox_yzoom.text != zoom_str:
+            textbox_yzoom.set_val(zoom_str)
+        if textbox_ypos.text != ypos_str:
+            textbox_ypos.set_val(ypos_str)
+
+        # 计算新的Y轴范围
+        base_height = 2.2
+        new_height = base_height / zoom
+        center = ypos
+        y_min = center - new_height / 2
+        y_max = center + new_height / 2
+
+        ax.set_ylim(y_min, y_max)
+        fig.canvas.draw_idle()
+
+    # X轴控制函数（优化性能）
+    def update_x_axis(val=None):
+        """更新X轴显示范围"""
+        xzoom = slider_xzoom.val
+        xpos = slider_xpos.val
+
+        # 只在值改变时更新输入框
+        xzoom_str = f'{xzoom:.2f}'
+        xpos_str = f'{xpos:.2f}'
+        if textbox_xzoom.text != xzoom_str:
+            textbox_xzoom.set_val(xzoom_str)
+        if textbox_xpos.text != xpos_str:
+            textbox_xpos.set_val(xpos_str)
+
+        # 计算新的X轴范围
+        # 基础范围是 0 到 total_duration
+        base_width = total_duration
+        new_width = base_width / xzoom  # 缩放后的宽度
+
+        # 计算可移动的范围
+        max_offset = base_width - new_width
+        if max_offset < 0:
+            max_offset = 0
+
+        # 根据位置滑块计算起始位置
+        x_start = xpos * max_offset
+        x_end = x_start + new_width
+
+        # 确保不超出边界
+        if x_end > base_width:
+            x_end = base_width
+            x_start = x_end - new_width
+        if x_start < 0:
+            x_start = 0
+            x_end = new_width
+
+        ax.set_xlim(x_start, x_end)
+        fig.canvas.draw_idle()
+
+    # 输入框回调函数
+    def on_yzoom_input(text):
+        """Y缩放输入框回调"""
+        try:
+            value = float(text)
+            # 限制在有效范围内
+            value = max(0.1, min(10.0, value))
+            slider_yzoom.set_val(value)
+        except ValueError:
+            # 输入无效，恢复当前值
+            textbox_yzoom.set_val(f'{slider_yzoom.val:.2f}')
+
+    def on_ypos_input(text):
+        """Y位置输入框回调"""
+        try:
+            value = float(text)
+            # 限制在有效范围内
+            value = max(-2.0, min(2.0, value))
+            slider_ypos.set_val(value)
+        except ValueError:
+            # 输入无效，恢复当前值
+            textbox_ypos.set_val(f'{slider_ypos.val:.2f}')
+
+    def on_xzoom_input(text):
+        """X缩放输入框回调"""
+        try:
+            value = float(text)
+            # 限制在有效范围内
+            value = max(0.1, min(10.0, value))
+            slider_xzoom.set_val(value)
+        except ValueError:
+            # 输入无效，恢复当前值
+            textbox_xzoom.set_val(f'{slider_xzoom.val:.2f}')
+
+    def on_xpos_input(text):
+        """X位置输入框回调"""
+        try:
+            value = float(text)
+            # 限制在有效范围内
+            value = max(0.0, min(1.0, value))
+            slider_xpos.set_val(value)
+        except ValueError:
+            # 输入无效，恢复当前值
+            textbox_xpos.set_val(f'{slider_xpos.val:.2f}')
+
+    def on_speed_input(text):
+        """播放速度输入框回调"""
+        global playback_speed
+        try:
+            value = float(text)
+            # 限制在有效范围内（0.1x - 3.0x）
+            value = max(0.1, min(3.0, value))
+            playback_speed = value
+            textbox_speed.set_val(f'{value:.2f}')
+            print(f"播放速度已设置为: {playback_speed}x")
+        except ValueError:
+            # 输入无效，恢复当前值
+            textbox_speed.set_val(f'{playback_speed:.2f}')
+
+    # 绑定滑块事件
+    slider_yzoom.on_changed(update_y_axis)
+    slider_ypos.on_changed(update_y_axis)
+    slider_xzoom.on_changed(update_x_axis)
+    slider_xpos.on_changed(update_x_axis)
+
+    # 绑定输入框事件
+    textbox_yzoom.on_submit(on_yzoom_input)
+    textbox_ypos.on_submit(on_ypos_input)
+    textbox_xzoom.on_submit(on_xzoom_input)
+    textbox_xpos.on_submit(on_xpos_input)
+    textbox_speed.on_submit(on_speed_input)
+
+    # 创建坐标显示标注（初始时不可见）
+    coord_annotation = ax.annotate('', xy=(0, 0), xytext=(20, 20),
+                                   textcoords='offset points',
+                                   bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.9),
+                                   arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'),
+                                   fontsize=10, visible=False)
+
+    # 创建十字光标线（初始时不可见）
+    cursor_vline = ax.axvline(x=0, color='gray', linestyle='--', linewidth=1, alpha=0.7, visible=False)
+    cursor_hline = ax.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.7, visible=False)
+
+    # 鼠标移动事件处理（优化性能）
+    last_mouse_pos = [None, None]  # 缓存上次鼠标位置，避免重复计算
+
+    def on_mouse_move(event):
+        """鼠标移动时显示坐标信息"""
+        if event.inaxes == ax:
+            x_mouse = event.xdata
+            y_mouse = event.ydata
+
+            if x_mouse is not None and y_mouse is not None:
+                # 如果鼠标位置变化很小，跳过更新（优化性能）
+                if last_mouse_pos[0] is not None:
+                    dx = abs(x_mouse - last_mouse_pos[0])
+                    dy = abs(y_mouse - last_mouse_pos[1])
+                    if dx < total_duration * 0.001 and dy < 0.01:  # 变化小于0.1%
+                        return
+
+                last_mouse_pos[0] = x_mouse
+                last_mouse_pos[1] = y_mouse
+
+                # 使用二分查找找到最接近的点
+                idx = np.searchsorted(display_time, x_mouse)
+                if idx >= len(display_time):
+                    idx = len(display_time) - 1
+                elif idx > 0 and abs(display_time[idx-1] - x_mouse) < abs(display_time[idx] - x_mouse):
+                    idx = idx - 1
+
+                x_actual = display_time[idx]
+                y_actual = display_audio[idx]
+
+                # 格式化时间显示
+                minutes = int(x_actual // 60)
+                seconds = x_actual % 60
+                time_str = f'{minutes:02d}:{seconds:06.3f}'
+
+                # 更新标注和光标
+                coord_annotation.set_text(f'时间: {time_str}\n幅度: {y_actual:.4f}')
+                coord_annotation.xy = (x_actual, y_actual)
+                coord_annotation.set_visible(True)
+                cursor_vline.set_xdata([x_actual, x_actual])
+                cursor_vline.set_visible(True)
+                cursor_hline.set_ydata([y_actual, y_actual])
+                cursor_hline.set_visible(True)
+
+                fig.canvas.draw_idle()
+        else:
+            # 鼠标离开绘图区域时隐藏标注和光标
+            if coord_annotation.get_visible():  # 只在可见时才隐藏（避免重复操作）
+                coord_annotation.set_visible(False)
+                cursor_vline.set_visible(False)
+                cursor_hline.set_visible(False)
+                last_mouse_pos[0] = None
+                last_mouse_pos[1] = None
+                fig.canvas.draw_idle()
+
+    # 按钮回调函数（优化更新方式）
     def on_play_clicked(event):
         status_text.set_text('正在播放...')
-        plt.draw()
+        fig.canvas.draw_idle()  # 使用 draw_idle 代替 plt.draw()，性能更好
         play_audio()
 
     def on_stop_clicked(event):
         status_text.set_text('已停止')
-        plt.draw()
+        fig.canvas.draw_idle()
         stop_audio()
 
     # 绑定按钮事件
     button_play.on_clicked(on_play_clicked)
     button_stop.on_clicked(on_stop_clicked)
+
+    # 绑定鼠标移动事件
+    fig.canvas.mpl_connect('motion_notify_event', on_mouse_move)
 
     # 显示图形
     plt.show()
